@@ -80,6 +80,19 @@ fn test_socket_stuff() {
             println!("{:<26} {:<26} {:<15} {:<12} -", local_address, remote_addr, state, entry.inode);
         }
     }
+
+    // get the udp table
+    let udp = procfs::net::udp().unwrap();
+    let udp6 = procfs::net::udp6().unwrap();
+    for entry in udp.into_iter().chain(udp6) {
+        println!("{:?}", entry);
+        if let Some(process) = map.get(&entry.inode) {
+            println!("{:<26} {:<26} {:<15} {:<12} {}/{}", local_address, remote_addr, state, entry.inode, process.stat.pid, process.stat.comm);
+        } else {
+            // We might not always be able to find the process assocated with this socket
+            println!("{:<26} {:<26} {:<15} {:<12} -", local_address, remote_addr, state, entry.inode);
+        }
+    }
 }
 
 fn main() {
