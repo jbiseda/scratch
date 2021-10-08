@@ -55,6 +55,7 @@ fn test_socket_stuff() {
     let mut map: HashMap<u64, &Process> = HashMap::new();
     for process in &all_procs {
         println!("process: {:?}", process.exe());
+        println!("       : {:?}", process.cmdline());
         if let Ok(fds) = process.fd() {
             for fd in fds {
                 println!("  fd:{:?}", fd);
