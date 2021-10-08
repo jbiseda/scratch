@@ -54,7 +54,7 @@ fn test_socket_stuff() {
     // build up a map between socket inodes and processes:
     let mut map: HashMap<u64, &Process> = HashMap::new();
     for process in &all_procs {
-        println!("process: {}", process.exe());
+        println!("process: {:?}", process.exe().unwrap());
         if let Ok(fds) = process.fd() {
             for fd in fds {
                 println!("  fd:{:?}", fd);
