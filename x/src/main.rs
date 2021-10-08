@@ -4,7 +4,7 @@ use rand_chacha::ChaChaRng;
 use rand::distributions::{Distribution, Uniform};
 use std::time::Instant;
 use std::collections::HashMap;
-use procfs::FDTarget;
+use procfs::process::FDTarget;
 use procfs::process::Process;
 
 fn get_seed() -> [u8; 32] {
@@ -54,7 +54,7 @@ fn test_socket_stuff() {
     let all_procs = procfs::process::all_processes().unwrap();
 
     // build up a map between socket inodes and processes:
-    let mut map: HashMap<u32, &Process> = HashMap::new();
+    let mut map: HashMap<u64, &Process> = HashMap::new();
     for process in &all_procs {
         if let Ok(fds) = process.fd() {
             for fd in fds {
