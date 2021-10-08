@@ -5,7 +5,7 @@ use rand::distributions::{Distribution, Uniform};
 use std::time::Instant;
 use std::collections::HashMap;
 use procfs::FDTarget;
-use procfs::process::Process
+use procfs::process::Process;
 
 fn get_seed() -> [u8; 32] {
     let mut rng = rand::thread_rng();
