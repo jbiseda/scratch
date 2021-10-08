@@ -112,6 +112,11 @@ fn test_socket_stuff() {
             );
         }
     }
+
+    let dev_stat = procfs::net::dev_status().unwrap();
+    for entry in dev_stat {
+        println("{:?}", entry);
+    }
 }
 
 fn main() {
