@@ -98,7 +98,7 @@ fn test_socket_stuff() {
             println!(
                 "{:<26} {:<26} {:<15} {:<12} {}/{}",
                 entry.local_address,
-                entry.remote_addr,
+                entry.remote_address,
                 entry.state,
                 entry.inode,
                 process.stat.pid,
@@ -108,7 +108,7 @@ fn test_socket_stuff() {
             // We might not always be able to find the process assocated with this socket
             println!(
                 "{:<26} {:<26} {:<15} {:<12} -",
-                entry.local_address, entry.remote_addr, entry.state, entry.inode,
+                entry.local_address, entry.remote_address, entry.state, entry.inode,
             );
         }
     }
