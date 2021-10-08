@@ -96,7 +96,7 @@ fn test_socket_stuff() {
         println!("{:?}", entry);
         if let Some(process) = map.get(&entry.inode) {
             println!(
-                "{:<26} {:<26} {:<15} {:<12} {}/{}",
+                "{:<26} {:<26} {:?} {:<12} {}/{}",
                 entry.local_address,
                 entry.remote_address,
                 entry.state,
@@ -107,7 +107,7 @@ fn test_socket_stuff() {
         } else {
             // We might not always be able to find the process assocated with this socket
             println!(
-                "{:<26} {:<26} {:<15} {:<12} -",
+                "{:<26} {:<26} {:?} {:<12} -",
                 entry.local_address, entry.remote_address, entry.state, entry.inode,
             );
         }
