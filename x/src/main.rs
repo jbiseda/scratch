@@ -17,7 +17,6 @@ fn get_seed() -> [u8; 32] {
     seed
 }
 
-
 fn test_existing() {
     let mut rng = ChaChaRng::from_seed(get_seed());
     for _ in 0..1_000 {
@@ -33,7 +32,7 @@ fn test_updated() {
     }
 }
 
-fn test_random_perf() {
+fn _test_random_perf() {
     let ts = Instant::now();
     for _ in 0..1_000 {
         test_existing();
@@ -86,5 +85,5 @@ fn test_socket_stuff() {
 fn main() {
     println!("Hello, world!");
 
-
+    test_socket_stuff();
 }
