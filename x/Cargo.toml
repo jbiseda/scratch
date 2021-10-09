@@ -8,4 +8,4 @@ edition = "2018"
 [dependencies]
 rand = "0.7.0"
 rand_chacha = "0.2.2"
-procfs = "*"
+procfs = "0.10.1"
