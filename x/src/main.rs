@@ -1,11 +1,20 @@
 //use rand::{Rng, SeedableRng, StdRng};
+#[cfg(target_os = "linux")]
 use procfs::process::FDTarget;
+#[cfg(target_os = "linux")]
 use procfs::process::Process;
+
+use bincode::config::Options;
 use rand::distributions::{Distribution, Uniform};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use std::collections::HashMap;
 use std::time::Instant;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::convert::TryFrom;
+
 
 fn get_seed() -> [u8; 32] {
     let mut rng = rand::thread_rng();
@@ -48,6 +57,7 @@ fn _test_random_perf() {
     println!("updated: {}us", elapsed.as_micros());
 }
 
+#[cfg(target_os = "linux")]
 fn test_socket_stuff() {
     let all_procs = procfs::process::all_processes().unwrap();
 
@@ -123,8 +133,115 @@ fn test_socket_stuff() {
     }
 }
 
+fn read_udp_stats(file_path: &str) -> Result<HashMap<String, usize>, String> {
+    let file = File::open(file_path).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(file);
+
+    let mut udp_lines = Vec::default();
+    for line in reader.lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.starts_with("Udp:") {
+            udp_lines.push(line);
+            if udp_lines.len() == 2 {
+                break;
+            }
+        }
+    }
+    if udp_lines.len() != 2 {
+        return Err(format!("parse error, expected 2 lines, num lines: {}", udp_lines.len()));
+    }
+
+    let pairs: Vec<_> = udp_lines[0].split_ascii_whitespace().zip(udp_lines[1].split_ascii_whitespace()).collect();
+    let udp_stats: HashMap<_, _> = pairs[1..].iter().map(|(label, val)| (label.to_string(), val.parse::<usize>().unwrap())).collect();
+
+    Ok(udp_stats)
+}
+
+
+
+fn read_snmp_file() {
+
+    //let file_path = "/proc/net/snmp";
+    let file_path = "/Volumes/solana/tmp/mock.snmp";
+
+    /*
+    Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti
+    Udp: 27 7 0 30 0 0 0 0
+    */
+
+    let udp_stats = read_udp_stats(file_path).unwrap();
+
+    let out_datagrams = udp_stats.get("OutDatagrams").unwrap();
+
+    println!("out_datagrams: {}", out_datagrams);
+}
+
+
+#[derive(Debug, Default, Clone)]
+struct TestStruct {
+    one: u64,
+    two: u64,
+}
+
+impl TestStruct {
+
+    fn sum(&self) -> u64 {
+        self.one + self.two
+    }
+}
+
+
+
 fn main() {
     println!("Hello, world!");
 
-    test_socket_stuff();
+    //test_socket_stuff();
+
+    read_snmp_file();
+
+    let platform = format!(
+        "{}/{}/{}",
+        std::env::consts::FAMILY,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+
+    println!("platform string: {}", platform);
+
+    let t = TestStruct::default();
+
+    println!("TestStruct {:?}", &t);
+    println!("TestStruct sum:{}", t.sum());
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+    };
+    /*
+    use {
+        super::*,
+        bincode::serialize,
+        solana_ledger::{blockstore::Blockstore, blockstore_meta::SlotMeta, get_tmp_ledger_path},
+        solana_perf::test_tx::test_tx,
+        solana_sdk::{clock::DEFAULT_TICKS_PER_SLOT, hash::hash},
+        std::sync::mpsc::sync_channel,
+    };
+
+    #[test]
+    fn test_poh_recorder_no_zero_tick() {
+        let prev_hash = Hash::default();
+        let ledger_path = get_tmp_ledger_path!();
+        {
+        }
+    }
+    */
+
+    #[test]
+    fn test_teststruct() {
+        let t = TestStruct::default();
+        let sum = t.sum();
+        assert_eq!(sum, 0);
+    }
 }
