@@ -14,6 +14,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::convert::TryFrom;
+use std::mem::size_of;
+//use std::intrinsics::discriminant_value;
+use core::mem::discriminant;
 
 
 fn get_seed() -> [u8; 32] {
@@ -192,12 +195,92 @@ impl TestStruct {
 
 
 
+pub type Slot = u64;
+pub type Nonce = u32;
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct ContactInfo {
+    abc: u64,
+}
+
+
+
+/// Window protocol messages
+#[derive(Serialize, Deserialize, Debug)]
+#[repr(C)]
+pub enum RepairProtocol {
+    WindowIndex(ContactInfo, Slot, u64),
+    HighestWindowIndex(ContactInfo, Slot, u64),
+    Orphan(ContactInfo, Slot),
+    WindowIndexWithNonce(ContactInfo, Slot, u64, Nonce),
+    HighestWindowIndexWithNonce(ContactInfo, Slot, u64, Nonce),
+    OrphanWithNonce(ContactInfo, Slot, Nonce),
+    AncestorHashes(ContactInfo, Slot, Nonce),
+    CodingWithNonce(ContactInfo, Slot, u64, Nonce),
+}
+
+#[repr(C)]
+pub enum Enum1 {
+    Zero = 0,
+    One = 1,
+    Two = 2,
+}
+
+
+fn abc() {
+
+    let x = RepairProtocol::Orphan(ContactInfo::default(), Slot::default());
+    dbg!(size_of::<RepairProtocol>());
+    dbg!(&x);
+    //dbg!(discriminant_value(&x));
+    dbg!(discriminant(&x));
+    dbg!(size_of::<Enum1>());
+}
+
+
+fn sysctl_read(name: &str) {
+    use sysctl::{CtlValue::String, Sysctl};
+    if let Ok(ctl) = sysctl::Ctl::new(name) {
+        //info!("Old {} value {:?}", name, ctl.value());
+
+        println!("name={}", name);
+        println!("ctl={:?}", ctl);
+        println!("ctl.description()={:?}", ctl.description());
+        println!("ctl.value()={:?}", ctl.value());
+        println!("ctl.value_string()={:?}", ctl.value_string());
+
+
+//        let my_int = my_string.parse::<i32>().unwrap();
+
+        let value_string = ctl.value_string().unwrap();
+        let my_int = value_string.parse::<i64>().unwrap();
+
+        println!(">>> {}", my_int);
+
+
+        /*
+        let ctl_value = String(value.to_string());
+        match ctl.set_value(String(value.to_string())) {
+            Ok(v) if v == ctl_value => info!("Updated {} to {:?}", name, ctl_value),
+            Ok(v) => info!(
+                "Update returned success but {} was set to {:?}, instead of {:?}",
+                name, v, ctl_value
+            ),
+            Err(e) => error!("Failed to set {} to {:?}. Err {:?}", name, ctl_value, e),
+        }
+        */
+    } else {
+        //error!("Failed to find sysctl {}", name);
+    }
+}
+
+
 fn main() {
     println!("Hello, world!");
 
     //test_socket_stuff();
 
-    read_snmp_file();
+    //read_snmp_file();
 
     let platform = format!(
         "{}/{}/{}",
@@ -212,6 +295,10 @@ fn main() {
 
     println!("TestStruct {:?}", &t);
     println!("TestStruct sum:{}", t.sum());
+
+    abc();
+
+    sysctl_read("security.mac.amfi.platform_ident_for_hardened_proc");
 }
 
 #[cfg(test)]
