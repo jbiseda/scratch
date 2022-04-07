@@ -17,6 +17,7 @@ use std::convert::TryFrom;
 use std::mem::size_of;
 //use std::intrinsics::discriminant_value;
 use core::mem::discriminant;
+use sha2::{Digest, Sha256};
 
 
 fn get_seed() -> [u8; 32] {
@@ -275,13 +276,144 @@ fn sysctl_read(name: &str) {
 }
 
 
+type QHash = [u8; 1];
+type QProof = Vec<QHash>;
+
+pub struct MerkleTree {
+    tree: Vec<QHash>,
+    nleaves: usize,
+}
+
+impl MerkleTree {
+    pub fn new(_leaf_count: usize) -> Self {
+        Self {
+            tree: Vec::with_capacity(16 * 2 - 1),
+            nleaves: 16,
+        }
+    }
+}
+
+
+fn qhash(bufs: &[&[u8]]) -> QHash {
+    let mut hasher = Sha256::new();
+    for b in bufs {
+        hasher.update(b);
+    }
+    let h = hasher.finalize();
+    let mut ret = [0u8; 1];
+    ret[..].copy_from_slice(&h.as_slice()[0..1]);
+    ret
+}
+
+
+// leaves padded to power of 2
+fn gen_tree(leaves: &Vec<QHash>) -> Vec<[u8; 1]> {
+    let tree_size = leaves.len() * 2 - 1;
+    let mut tree = Vec::with_capacity(tree_size);
+
+    println!("--- gen tree ---");
+
+    for i in 0..leaves.len() {
+        //tree[i] = leaves[i];
+        tree.push(leaves[i]);
+    }
+
+    let mut base = 0;
+    let mut level_leaves = leaves.len();
+    while level_leaves > 1 {
+        for i in (0..level_leaves).step_by(2) {
+            let hash = qhash(&[&tree[base+i], &tree[base+i+1]]);
+            //tree[base+i/2] = hash;
+            println!("push({:?})", &hash);
+            tree.push(hash);
+        }
+        println!("");
+        base += level_leaves;
+        level_leaves /= 2;
+    }
+
+    tree
+}
+
+fn gen_proof(tree: &Vec<[u8; 1]>, nleaves: usize, idx: usize) -> QProof {
+    let mut proof = Vec::new();
+    let mut level_leaves = nleaves;
+    let mut i = idx;
+    let mut base = 0;
+    while level_leaves > 1 {
+        if i % 2 == 0 {
+            proof.push(tree[base + i + 1]);
+        } else {
+            proof.push(tree[base + i - 1]);
+        }
+        base += level_leaves;
+        i /= 2;
+        level_leaves /= 2;
+    }
+    proof
+}
+
+fn check_proof(proof: &QProof, root: &QHash, start: &QHash, idx: usize) -> bool {
+    println!("--- proving {:?} for {:?} --- ", start, root);
+    let mut hash = start.clone();
+    let mut j = idx;
+    for i in 0..proof.len() {
+        hash = if j % 2 == 0 {
+            qhash(&[&hash, &proof[i]])
+        } else {
+            qhash(&[&proof[i], &hash])
+        };
+        println!("{:?}", &hash);
+        j /= 2;
+    }
+    &hash == root
+}
+
+
+fn merkle_stuff() {
+
+    let mut rng = rand::thread_rng();
+
+    let mut packets = Vec::default();
+
+    for i in 0..16 {
+        let buf: Vec<u8> = (0..1024).map(|_| rand::random::<u8>()).collect();
+        packets.push(buf);
+    }
+
+    let leaves: Vec<[u8; 1]> = packets.iter().map(|p| qhash(&[&p])).collect();
+
+    let tree = gen_tree(&leaves);
+
+    let mut base = 0;
+    let mut nleaves = 16;
+    while nleaves > 0 {
+        println!("{:?}", &tree[base..base+nleaves]);
+        base += nleaves;
+        nleaves /= 2;
+    }
+
+    println!("tree: {:?}", &tree);
+
+    let root = tree[tree.len() - 1];
+    println!("root: {:?}", &root);
+
+    let proof5 = gen_proof(&tree, 16, 5);
+    println!("proof5: {:?}", &proof5);
+
+    let res = check_proof(&proof5, &root, &leaves[5], 5);
+    println!("res: {}", res);
+
+}
+
 fn main() {
-    println!("Hello, world!");
+    merkle_stuff();
 
     //test_socket_stuff();
 
     //read_snmp_file();
 
+    /*
     let platform = format!(
         "{}/{}/{}",
         std::env::consts::FAMILY,
@@ -299,6 +431,7 @@ fn main() {
     abc();
 
     sysctl_read("security.mac.amfi.platform_ident_for_hardened_proc");
+    */
 }
 
 #[cfg(test)]
