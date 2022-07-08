@@ -406,8 +406,135 @@ fn merkle_stuff() {
 
 }
 
+
+
+use std::{path::Path};
+
+
+#[derive(Debug, Default)]
+struct InterfaceStats {
+    name: String,
+    receive_bytes: u64,
+    receive_packets: u64,
+    receive_errs: u64,
+    receive_drop: u64,
+    receive_fifo: u64,
+    receive_frame: u64,
+    receive_compressed: u64,
+    receive_multicast: u64,
+    transmit_bytes: u64,
+    transmit_packets: u64,
+    transmit_errs: u64,
+    transmit_drop: u64,
+    transmit_fifo: u64,
+    transmit_colls: u64,
+    transmit_carrier: u64,
+    transmit_compressed: u64,
+}
+
+impl InterfaceStats {
+    fn parse_stats(reader: &mut impl BufRead) -> Result<InterfaceStats, String> {
+        let mut lines = Vec::default();
+        for line in reader.lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            lines.push(line);
+        }
+
+        for (i, line) in lines.iter().enumerate() {
+            if i < 2 {
+                continue;
+            }
+            let fields: Vec<_> = line.split_ascii_whitespace().collect();
+
+            if fields.len() != 17 {
+                // error TODO fail
+                continue;
+            }
+            let mut values = Vec::default();
+            for f in fields[1..].iter() {
+                values.push(f.parse::<u64>().map_err(|e: std::num::ParseIntError| e.to_string())?);
+            }
+            let if_stats = Self {
+                name: fields[0].trim_matches(':').to_string(),
+                receive_bytes: values[0],
+                receive_packets: values[1],
+                receive_errs: values[2],
+                receive_drop: values[3],
+                receive_fifo: values[4],
+                receive_frame: values[5],
+                receive_compressed: values[6],
+                receive_multicast: values[7],
+                transmit_bytes: values[8],
+                transmit_packets: values[9],
+                transmit_errs: values[10],
+                transmit_drop: values[11],
+                transmit_fifo: values[12],
+                transmit_colls: values[13],
+                transmit_carrier: values[14],
+                transmit_compressed: values[15],
+            };
+            println!("{:#?}", &if_stats);
+        }
+
+        Ok(InterfaceStats::default())
+    }
+
+    fn read_stats(file_path: impl AsRef<Path>) -> Result<InterfaceStats, String> {
+        let file = File::open(file_path).map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(file);
+        Self::parse_stats(&mut reader)
+    }
+}
+
+
+fn test_parse_if_stats() {
+    let mut mock_if =
+b"Inter-|   Receive                                                |  Transmit
+face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+   lo: 19114330   29341    0    0    0     0          0         0 19114330   29341    0    0    0     0       0          0
+ ens4: 3555983   24685    0    0    0     0          0         0 62108410   58508    0    0    0     0       0          0
+docker0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0" as &[u8];
+    let stats = InterfaceStats::parse_stats(&mut mock_if).unwrap();
+
+    println!("{:?}", &stats);
+
+//    assert_eq!(stats.out_datagrams, 30);
+//    assert_eq!(stats.no_ports, 7);
+
+//    let mut mock_snmp = b"unexpected data" as &[u8];
+//    let stats = parse_udp_stats(&mut mock_snmp);
+//    assert!(stats.is_err());
+}
+
+
+extern crate interfaces;
+use interfaces::Interface;
+
+
+fn if_stats_stuff() {
+    println!("IF STATS STUFF");
+
+    test_parse_if_stats();
+
+    let ifs = Interface::get_all().unwrap();
+
+    //println!("interfaces: {:#?}", &ifs);
+
+    for interface in &ifs {
+        println!("{}:", &interface.name);
+        for addr in &interface.addresses {
+            println!("{:?}", &addr);
+        }
+        println!("");
+    }
+
+
+}
+
 fn main() {
-    merkle_stuff();
+    if_stats_stuff();
+
+    //merkle_stuff();
 
     //test_socket_stuff();
 
