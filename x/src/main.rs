@@ -525,7 +525,7 @@ fn if_stats_stuff() {
         for addr in &interface.addresses {
             println!("{:?}", &addr);
         }
-        println!("");
+        println!("{:#?}", &interface);
     }
 
 
