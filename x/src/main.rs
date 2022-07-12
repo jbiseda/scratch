@@ -411,9 +411,13 @@ fn merkle_stuff() {
 use std::{path::Path};
 
 
+//#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const PROC_NET_DEV_PATH: &str = "/proc/net/dev";
+
+
 #[derive(Debug, Default)]
 struct InterfaceStats {
-    name: String,
     receive_bytes: u64,
     receive_packets: u64,
     receive_errs: u64,
@@ -433,13 +437,15 @@ struct InterfaceStats {
 }
 
 impl InterfaceStats {
-    fn parse_stats(reader: &mut impl BufRead) -> Result<InterfaceStats, String> {
+    //#[cfg(target_os = "linux")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn parse_stats(reader: &mut impl BufRead) -> Result<HashMap<String, InterfaceStats>, String> {
         let mut lines = Vec::default();
         for line in reader.lines() {
             let line = line.map_err(|e| e.to_string())?;
             lines.push(line);
         }
-
+        let mut interfaces_stats = HashMap::new();
         for (i, line) in lines.iter().enumerate() {
             if i < 2 {
                 continue;
@@ -454,8 +460,8 @@ impl InterfaceStats {
             for f in fields[1..].iter() {
                 values.push(f.parse::<u64>().map_err(|e: std::num::ParseIntError| e.to_string())?);
             }
+            let if_name = fields[0].trim_matches(':').to_string();
             let if_stats = Self {
-                name: fields[0].trim_matches(':').to_string(),
                 receive_bytes: values[0],
                 receive_packets: values[1],
                 receive_errs: values[2],
@@ -473,13 +479,14 @@ impl InterfaceStats {
                 transmit_carrier: values[14],
                 transmit_compressed: values[15],
             };
-            println!("{:#?}", &if_stats);
+            interfaces_stats.insert(if_name, if_stats);
         }
-
-        Ok(InterfaceStats::default())
+        Ok(interfaces_stats)
     }
 
-    fn read_stats(file_path: impl AsRef<Path>) -> Result<InterfaceStats, String> {
+    //#[cfg(target_os = "linux")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn read_stats(file_path: impl AsRef<Path>) -> Result<HashMap<String, InterfaceStats>, String> {
         let file = File::open(file_path).map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(file);
         Self::parse_stats(&mut reader)
@@ -514,12 +521,14 @@ use interfaces::Interface;
 fn if_stats_stuff() {
     println!("IF STATS STUFF");
 
-    test_parse_if_stats();
+    let stats = InterfaceStats::read_stats(PROC_NET_DEV_PATH).unwrap();
+    println!("{:#?}", &stats);
 
+
+    //test_parse_if_stats();
+
+    /*
     let ifs = Interface::get_all().unwrap();
-
-    //println!("interfaces: {:#?}", &ifs);
-
     for interface in &ifs {
         println!("{}:", &interface.name);
         for addr in &interface.addresses {
@@ -527,8 +536,7 @@ fn if_stats_stuff() {
         }
         println!("{:#?}", &interface);
     }
-
-
+    */
 }
 
 fn main() {
