@@ -506,11 +506,13 @@ fn test_ping() {
             },
             Ok((nrecv, from)) => {
                 println!("recv {} bytes from {:?}", nrecv, &from);
-                let rsp: RepairResponse = deserialize(&buffer[..nrecv]).unwrap();
-                match rsp {
-                    RepairResponse::Ping(ping) => {
+                match deserialize(&buffer[..nrecv]) {
+                    Ok(RepairResponse::Ping(ping)) => {
                         println!("sending pong");
                         send_pong(&keypair, &socket, &from, &ping);
+                    },
+                    Err(e) => {
+                        println!("failed to deserialize {:?}", &buffer[..nrecv]);
                     }
                 }
             }
