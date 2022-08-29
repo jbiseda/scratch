@@ -467,7 +467,7 @@ fn send_orphan(
         slot,
     };
     let pktbuf = repair_proto_to_bytes(&req, keypair);
-    println!("sending to {:?}: {:?}", &target_addr, &req);
+    println!("sending to {:?} --- {:?} --- {:?}", &target_addr, &req, &pktbuf);
     socket.send_to(&pktbuf, target_addr).unwrap();
 }
 
@@ -482,8 +482,9 @@ fn test_ping() {
     //let keypair = Keypair::new();
     //let keypair = Arc::new(keypair);
 
-    let socket = UdpSocket::bind("10.138.0.18:0").unwrap();
+    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     let socket = Arc::new(socket);
+    println!("bind to socket {:?}", &socket);
 
     //let recv_handle = start_recver(keypair.clone(), socket.clone());
     //recv_handle.join();
