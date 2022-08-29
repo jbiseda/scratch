@@ -467,6 +467,7 @@ fn send_orphan(
         slot,
     };
     let pktbuf = repair_proto_to_bytes(&req, keypair);
+    println!("sending to {:?}: {:?}", &target_addr, &req);
     socket.send_to(&pktbuf, target_addr).unwrap();
 }
 
