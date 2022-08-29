@@ -15,290 +15,515 @@ use std::io::{BufRead, BufReader};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::convert::TryFrom;
 use std::mem::size_of;
+use std::{
+    net::{UdpSocket, SocketAddr},
+    thread::{Builder, JoinHandle},
+    time::{SystemTime, Duration},
+    sync::Arc,
+};
 //use std::intrinsics::discriminant_value;
 use core::mem::discriminant;
+use generic_array::{typenum::U64, GenericArray};
 
-
-fn get_seed() -> [u8; 32] {
-    let mut rng = rand::thread_rng();
-    let mut seed = [0u8; 32];
-    for i in 0..32 {
-        seed[i] = rng.gen_range(0, u8::MAX);
-    }
-    //println!("seed: {:?}", seed);
-    seed
-}
-
-fn test_existing() {
-    let mut rng = ChaChaRng::from_seed(get_seed());
-    for _ in 0..1_000 {
-        let _x = rng.gen_range(1, u128::from(std::u16::MAX));
-    }
-}
-
-fn test_updated() {
-    let mut rng = ChaChaRng::from_seed(get_seed());
-    let between = Uniform::from(1..std::u16::MAX);
-    for _ in 0..1_000 {
-        let _x = between.sample(&mut rng);
-    }
-}
-
-fn _test_random_perf() {
-    let ts = Instant::now();
-    for _ in 0..1_000 {
-        test_existing();
-    }
-    let elapsed = ts.elapsed();
-    println!("existing: {}us", elapsed.as_micros());
-
-    let ts = Instant::now();
-    for _ in 0..1_000 {
-        test_updated();
-    }
-    let elapsed = ts.elapsed();
-    println!("updated: {}us", elapsed.as_micros());
-}
-
-#[cfg(target_os = "linux")]
-fn test_socket_stuff() {
-    let all_procs = procfs::process::all_processes().unwrap();
-
-    // build up a map between socket inodes and processes:
-    let mut map: HashMap<u64, &Process> = HashMap::new();
-    for process in &all_procs {
-        println!("process: {:?}", process.exe());
-        println!("       : {:?}", process.cmdline());
-        if let Ok(fds) = process.fd() {
-            for fd in fds {
-                println!("  fd:{:?}", fd);
-                if let FDTarget::Socket(inode) = fd.target {
-                    println!("  inode:{}", inode);
-                    map.insert(inode, process);
-                }
-            }
-        }
-    }
-
-    // get the tcp table
-    let tcp = procfs::net::tcp().unwrap();
-    let tcp6 = procfs::net::tcp6().unwrap();
-    println!(
-        "{:<26} {:<26} {:<15} {:<8} {}",
-        "Local address", "Remote address", "State", "Inode", "PID/Program name"
-    );
-    for entry in tcp.into_iter().chain(tcp6) {
-        // find the process (if any) that has an open FD to this entry's inode
-        let local_address = format!("{}", entry.local_address);
-        let remote_addr = format!("{}", entry.remote_address);
-        let state = format!("{:?}", entry.state);
-        if let Some(process) = map.get(&entry.inode) {
-            println!(
-                "{:<26} {:<26} {:<15} {:<12} {}/{}",
-                local_address, remote_addr, state, entry.inode, process.stat.pid, process.stat.comm,
-            );
-        } else {
-            // We might not always be able to find the process assocated with this socket
-            println!(
-                "{:<26} {:<26} {:<15} {:<12} -",
-                local_address, remote_addr, state, entry.inode
-            );
-        }
-    }
-
-    // get the udp table
-    let udp = procfs::net::udp().unwrap();
-    let udp6 = procfs::net::udp6().unwrap();
-    for entry in udp.into_iter().chain(udp6) {
-        println!("{:?}", entry);
-        if let Some(process) = map.get(&entry.inode) {
-            println!(
-                "{:<26} {:<26} {:?} {:<12} {}/{}",
-                entry.local_address,
-                entry.remote_address,
-                entry.state,
-                entry.inode,
-                process.stat.pid,
-                process.stat.comm,
-            );
-        } else {
-            // We might not always be able to find the process assocated with this socket
-            println!(
-                "{:<26} {:<26} {:?} {:<12} -",
-                entry.local_address, entry.remote_address, entry.state, entry.inode,
-            );
-        }
-    }
-
-    let dev_stat = procfs::net::dev_status().unwrap();
-    for entry in dev_stat {
-        println!("{:?}", entry);
-    }
-}
-
-fn read_udp_stats(file_path: &str) -> Result<HashMap<String, usize>, String> {
-    let file = File::open(file_path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(file);
-
-    let mut udp_lines = Vec::default();
-    for line in reader.lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.starts_with("Udp:") {
-            udp_lines.push(line);
-            if udp_lines.len() == 2 {
-                break;
-            }
-        }
-    }
-    if udp_lines.len() != 2 {
-        return Err(format!("parse error, expected 2 lines, num lines: {}", udp_lines.len()));
-    }
-
-    let pairs: Vec<_> = udp_lines[0].split_ascii_whitespace().zip(udp_lines[1].split_ascii_whitespace()).collect();
-    let udp_stats: HashMap<_, _> = pairs[1..].iter().map(|(label, val)| (label.to_string(), val.parse::<usize>().unwrap())).collect();
-
-    Ok(udp_stats)
-}
+use borsh::{BorshDeserialize, BorshSchema, BorshSerialize};
+use bytemuck::{Pod, Zeroable};
+//use ed25519_dalek::Signer as DalekSigner;
+//use ed25519_dalek_bip32::Error as Bip32Error;
+use ed25519_dalek;
+use ed25519_dalek::Signer as DalekSigner;
+//use ed25519_dalek::Digest;
+use sha2::{Sha256, Digest};
+use bincode::{serialize, deserialize};
+use rand::{AsByteSliceMut, CryptoRng, RngCore, rngs::OsRng};
 
 
 
-fn read_snmp_file() {
-
-    //let file_path = "/proc/net/snmp";
-    let file_path = "/Volumes/solana/tmp/mock.snmp";
-
-    /*
-    Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti
-    Udp: 27 7 0 30 0 0 0 0
-    */
-
-    let udp_stats = read_udp_stats(file_path).unwrap();
-
-    let out_datagrams = udp_stats.get("OutDatagrams").unwrap();
-
-    println!("out_datagrams: {}", out_datagrams);
-}
 
 
-#[derive(Debug, Default, Clone)]
-struct TestStruct {
-    one: u64,
-    two: u64,
-}
+/// Size of a hash in bytes.
+pub const HASH_BYTES: usize = 32;
 
-impl TestStruct {
+#[derive(
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+    BorshSchema,
+    Clone,
+    Copy,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Debug,
+)]
+#[repr(transparent)]
+pub struct Hash(pub(crate) [u8; HASH_BYTES]);
 
-    fn sum(&self) -> u64 {
-        self.one + self.two
+impl AsRef<[u8]> for Hash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0[..]
     }
 }
 
 
-
-pub type Slot = u64;
 pub type Nonce = u32;
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ContactInfo {
-    abc: u64,
+#[repr(transparent)]
+#[derive(
+    Serialize, Deserialize, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Debug,
+)]
+pub struct Signature(GenericArray<u8, U64>);
+
+impl Signature {
+    pub fn new(signature_slice: &[u8]) -> Self {
+        Self(GenericArray::clone_from_slice(signature_slice))
+    }
+}
+
+#[derive(Debug)]
+pub struct Keypair(ed25519_dalek::Keypair);
+
+impl Keypair {
+    /// Constructs a new, random `Keypair` using a caller-provided RNG
+    pub fn generate<R>(csprng: &mut R) -> Self
+    where
+        R: CryptoRng + RngCore,
+    {
+        Self(ed25519_dalek::Keypair::generate(csprng))
+    }
+
+    /// Constructs a new, random `Keypair` using `OsRng`
+    pub fn new() -> Self {
+        let mut rng = OsRng::default();
+        Self::generate(&mut rng)
+    }
+
+    /// Recovers a `Keypair` from a byte array
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ed25519_dalek::SignatureError> {
+        ed25519_dalek::Keypair::from_bytes(bytes).map(Self)
+    }
+
+    /// Returns this `Keypair` as a byte array
+    pub fn to_bytes(&self) -> [u8; 64] {
+        self.0.to_bytes()
+    }
+
+    /// Recovers a `Keypair` from a base58-encoded string
+    pub fn from_base58_string(s: &str) -> Self {
+        Self::from_bytes(&bs58::decode(s).into_vec().unwrap()).unwrap()
+    }
+
+    /// Returns this `Keypair` as a base58-encoded string
+    pub fn to_base58_string(&self) -> String {
+        bs58::encode(&self.0.to_bytes()).into_string()
+    }
+
+    /// Gets this `Keypair`'s SecretKey
+    pub fn secret(&self) -> &ed25519_dalek::SecretKey {
+        &self.0.secret
+    }
+}
+
+pub trait Signer {
+    /// Infallibly gets the implementor's public key. Returns the all-zeros
+    /// `Pubkey` if the implementor has none.
+    fn pubkey(&self) -> Pubkey {
+        self.try_pubkey()
+    }
+    /// Fallibly gets the implementor's public key
+    fn try_pubkey(&self) -> Pubkey;
+    /// Infallibly produces an Ed25519 signature over the provided `message`
+    /// bytes. Returns the all-zeros `Signature` if signing is not possible.
+    fn sign_message(&self, message: &[u8]) -> Signature {
+        self.try_sign_message(message)
+    }
+    /// Fallibly produces an Ed25519 signature over the provided `message` bytes.
+    fn try_sign_message(&self, message: &[u8]) -> Signature;
+    /// Whether the impelmentation requires user interaction to sign
+    fn is_interactive(&self) -> bool;
+}
+
+impl Signer for Keypair {
+    fn pubkey(&self) -> Pubkey {
+        Pubkey::new(self.0.public.as_ref())
+    }
+
+    fn try_pubkey(&self) -> Pubkey {
+        self.pubkey()
+    }
+
+    fn sign_message(&self, message: &[u8]) -> Signature {
+        Signature::new(&self.0.sign(message).to_bytes())
+    }
+
+    fn try_sign_message(&self, message: &[u8]) -> Signature {
+        self.sign_message(message)
+    }
+
+    fn is_interactive(&self) -> bool {
+        false
+    }
 }
 
 
+//#[wasm_bindgen]
+#[repr(transparent)]
+#[derive(
+    BorshDeserialize,
+    BorshSchema,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Pod,
+    Serialize,
+    Zeroable,
+    Debug,
+)]
+pub struct Pubkey(pub(crate) [u8; 32]);
+
+impl Pubkey {
+    pub fn new(pubkey_vec: &[u8]) -> Self {
+        Self(
+            <[u8; 32]>::try_from(<&[u8]>::clone(&pubkey_vec))
+                .expect("Slice must be the same length as a Pubkey"),
+        )
+    }
+}
+
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PingInner<T> {
+    from: Pubkey,
+    token: T,
+    signature: Signature,
+}
+
+type Ping = PingInner<[u8; 32]>;
+type Slot = u64;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PongInner {
+    from: Pubkey,
+    hash: Hash, // Hash of received ping token.
+    signature: Signature,
+}
+
+impl PongInner {
+    pub fn new<T: Serialize>(
+        ping: &PingInner<T>,
+        keypair: &Keypair,
+    ) -> Self {
+        let token = serialize(&ping.token).unwrap();
+//        let hash = if domain {
+//            hash::hashv(&[PING_PONG_HASH_PREFIX, &token])
+//        } else {
+//            hash::hash(&token)
+//        };
+        let hashval = hash(&token);
+        let pong = PongInner {
+            from: keypair.pubkey(),
+            hash: hashval,
+            signature: keypair.sign_message(hashval.as_ref()),
+        };
+        pong
+    }
+
+    pub fn from(&self) -> &Pubkey {
+        &self.from
+    }
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RepairRequestHeader {
+    signature: Signature,
+    sender: Pubkey,
+    recipient: Pubkey,
+    timestamp: u64,
+    nonce: Nonce,
+}
 
 /// Window protocol messages
 #[derive(Serialize, Deserialize, Debug)]
-#[repr(C)]
 pub enum RepairProtocol {
-    WindowIndex(ContactInfo, Slot, u64),
-    HighestWindowIndex(ContactInfo, Slot, u64),
-    Orphan(ContactInfo, Slot),
-    WindowIndexWithNonce(ContactInfo, Slot, u64, Nonce),
-    HighestWindowIndexWithNonce(ContactInfo, Slot, u64, Nonce),
-    OrphanWithNonce(ContactInfo, Slot, Nonce),
-    AncestorHashes(ContactInfo, Slot, Nonce),
-    CodingWithNonce(ContactInfo, Slot, u64, Nonce),
+    LegacyWindowIndex,
+    LegacyHighestWindowIndex,
+    LegacyOrphan,
+    LegacyWindowIndexWithNonce,
+    LegacyHighestWindowIndexWithNonce,
+    LegacyOrphanWithNonce,
+    LegacyAncestorHashes,
+    Pong(PongInner),
+    WindowIndex,
+    HighestWindowIndex,
+    Orphan {
+        header: RepairRequestHeader,
+        slot: Slot,
+    },
+    AncestorHashes,
 }
 
-#[repr(C)]
-pub enum Enum1 {
-    Zero = 0,
-    One = 1,
-    Two = 2,
-}
-
-
-fn abc() {
-
-    let x = RepairProtocol::Orphan(ContactInfo::default(), Slot::default());
-    dbg!(size_of::<RepairProtocol>());
-    dbg!(&x);
-    //dbg!(discriminant_value(&x));
-    dbg!(discriminant(&x));
-    dbg!(size_of::<Enum1>());
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) enum RepairResponse {
+    Ping(Ping),
 }
 
 
-fn sysctl_read(name: &str) {
-    use sysctl::{CtlValue::String, Sysctl};
-    if let Ok(ctl) = sysctl::Ctl::new(name) {
-        //info!("Old {} value {:?}", name, ctl.value());
+#[derive(Clone, Default)]
+pub struct Hasher {
+    hasher: Sha256,
+}
 
-        println!("name={}", name);
-        println!("ctl={:?}", ctl);
-        println!("ctl.description()={:?}", ctl.description());
-        println!("ctl.value()={:?}", ctl.value());
-        println!("ctl.value_string()={:?}", ctl.value_string());
-
-
-//        let my_int = my_string.parse::<i32>().unwrap();
-
-        let value_string = ctl.value_string().unwrap();
-        let my_int = value_string.parse::<i64>().unwrap();
-
-        println!(">>> {}", my_int);
-
-
-        /*
-        let ctl_value = String(value.to_string());
-        match ctl.set_value(String(value.to_string())) {
-            Ok(v) if v == ctl_value => info!("Updated {} to {:?}", name, ctl_value),
-            Ok(v) => info!(
-                "Update returned success but {} was set to {:?}, instead of {:?}",
-                name, v, ctl_value
-            ),
-            Err(e) => error!("Failed to set {} to {:?}. Err {:?}", name, ctl_value, e),
+impl Hasher {
+    pub fn hash(&mut self, val: &[u8]) {
+        self.hasher.update(val);
+    }
+    pub fn hashv(&mut self, vals: &[&[u8]]) {
+        for val in vals {
+            self.hash(val);
         }
-        */
-    } else {
-        //error!("Failed to find sysctl {}", name);
+    }
+    pub fn result(self) -> Hash {
+        // At the time of this writing, the sha2 library is stuck on an old version
+        // of generic_array (0.9.0). Decouple ourselves with a clone to our version.
+        Hash(<[u8; HASH_BYTES]>::try_from(self.hasher.finalize().as_slice()).unwrap())
+    }
+}
+
+pub fn hashv(vals: &[&[u8]]) -> Hash {
+    // Perform the calculation inline, calling this from within a program is
+    // not supported
+    {
+        let mut hasher = Hasher::default();
+        hasher.hashv(vals);
+        hasher.result()
+    }
+}
+
+pub fn hash(val: &[u8]) -> Hash {
+    hashv(&[val])
+}
+
+#[macro_export]
+macro_rules! unchecked_div_by_const {
+    ($num:expr, $den:expr) => {{
+        // Ensure the denominator is compile-time constant
+        let _ = [(); ($den - $den) as usize];
+        // Compile-time constant integer div-by-zero passes for some reason
+        // when invoked from a compilation unit other than that where this
+        // macro is defined. Do an explicit zero-check for now. Sorry about the
+        // ugly error messages!
+        // https://users.rust-lang.org/t/unexpected-behavior-of-compile-time-integer-div-by-zero-check-in-declarative-macro/56718
+        let _ = [(); ($den as usize) - 1];
+        #[allow(clippy::integer_arithmetic)]
+        let quotient = $num / $den;
+        quotient
+    }};
+}
+
+pub fn duration_as_ms(d: &Duration) -> u64 {
+    d.as_secs()
+        .saturating_mul(1000)
+        .saturating_add(unchecked_div_by_const!(
+            u64::from(d.subsec_nanos()),
+            1_000_000
+        ))
+}
+
+pub fn timestamp() -> u64 {
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("create timestamp in timing");
+    duration_as_ms(&now)
+}
+
+/*
+impl FromStr for Pubkey {
+    type Err = ParsePubkeyError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() > MAX_BASE58_LEN {
+            return Err(ParsePubkeyError::WrongSize);
+        }
+        let pubkey_vec = bs58::decode(s)
+            .into_vec()
+            .map_err(|_| ParsePubkeyError::Invalid)?;
+        if pubkey_vec.len() != mem::size_of::<Pubkey>() {
+            Err(ParsePubkeyError::WrongSize)
+        } else {
+            Ok(Pubkey::new(&pubkey_vec))
+        }
+    }
+}
+*/
+
+pub const SIGNATURE_BYTES: usize = 64;
+
+impl AsRef<[u8]> for Signature {
+    fn as_ref(&self) -> &[u8] {
+        &self.0[..]
     }
 }
 
 
+pub fn repair_proto_to_bytes(
+    request: &RepairProtocol,
+    keypair: &Keypair,
+) -> Vec<u8> {
+    let mut payload = serialize(&request).unwrap();
+    let signable_data = [&payload[..4], &payload[4 + SIGNATURE_BYTES..]].concat();
+    let signature = keypair.sign_message(&signable_data[..]);
+    payload[4..4 + SIGNATURE_BYTES].copy_from_slice(signature.as_ref());
+    payload
+}
+
+
+
+fn send_pong(
+    keypair: &Keypair,
+    socket: &UdpSocket,
+    to: &SocketAddr,
+    ping: &PingInner<[u8; 32]>
+) {
+    let pong_inner = PongInner::new(ping, keypair);
+    let req = RepairProtocol::Pong(pong_inner);
+    let pktbuf = serialize(&req).unwrap();
+    socket.send_to(&pktbuf, to).unwrap();
+}
+
+
+/*
+fn start_recver(keypair: Arc<Keypair>, socket: Arc<UdpSocket>) -> JoinHandle<()> {
+    Builder::new()
+        .name("recv".to_string())
+        .spawn(move || {
+            loop {
+                let mut buffer: Vec<u8> = vec![0; 1500];
+                match socket.recv_from(&mut buffer) {
+                    Err(e) => break,
+                    Ok((nrecv, from)) => {
+                        println!("recv {} bytes from {:?}", nrecv, &from);
+                        let rsp: RepairResponse = deserialize(&buffer[..nrecv]).unwrap();
+                        match rsp {
+                            RepairResponse::Ping(ping) => {
+                                send_pong(&keypair, &socket, &from, &ping);
+                            }
+                        };
+                    },
+                }
+            };
+        })
+        .unwrap()
+}
+*/
+
+/*
+fn send_orphans(keypair: &Keypair, target_pubkey: &Pubkey) {
+    let mut nonce: u32 = 123;
+    let mut slot: u64 = 123;
+    loop {
+        let req = RepairProtocol::Orphan {
+            header: RepairRequestHeader {
+                signature: Signature::default(),
+                sender: keypair.pubkey(),
+                recipient: *target_pubkey,
+                timestamp: timestamp(),
+                nonce,
+            },
+            slot,
+        };
+        nonce += 1;
+        slot += 1;
+    }
+}
+*/
+
+fn send_orphan(
+    keypair: &Keypair,
+    socket: &UdpSocket,
+    target_pubkey: &Pubkey,
+    target_addr: &SocketAddr,
+) {
+    let nonce: u32 = 123;
+    let slot: u64 = 123;
+    let req = RepairProtocol::Orphan {
+        header: RepairRequestHeader {
+            signature: Signature::default(),
+            sender: keypair.pubkey(),
+            recipient: *target_pubkey,
+            timestamp: timestamp(),
+            nonce,
+        },
+        slot,
+    };
+    let pktbuf = repair_proto_to_bytes(&req, keypair);
+    socket.send_to(&pktbuf, target_addr).unwrap();
+}
+
+
+
+
+fn test_ping() {
+    println!("TEST PING");
+
+    let argv: Vec<String> = std::env::args().collect();
+
+    //let keypair = Keypair::new();
+    //let keypair = Arc::new(keypair);
+
+    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    let socket = Arc::new(socket);
+
+    //let recv_handle = start_recver(keypair.clone(), socket.clone());
+    //recv_handle.join();
+
+    let target_addr: SocketAddr = argv[1].parse().unwrap();
+    let pubkey_vec = bs58::decode(argv[2].to_string()).into_vec().unwrap();
+    let target_pubkey = Pubkey::new(&pubkey_vec);
+
+    loop {
+        let keypair = Keypair::new();
+        send_orphan(&keypair, &socket, &target_pubkey, &target_addr);
+        let mut buffer: Vec<u8> = vec![0; 1500];
+
+        socket.set_read_timeout(Some(Duration::new(1, 0))).unwrap();
+
+        match socket.recv_from(&mut buffer) {
+            Err(e) => {
+                println!("ERR: {:?}", &e);
+            },
+            Ok((nrecv, from)) => {
+                println!("recv {} bytes from {:?}", nrecv, &from);
+                let rsp: RepairResponse = deserialize(&buffer[..nrecv]).unwrap();
+                match rsp {
+                    RepairResponse::Ping(ping) => {
+                        println!("sending pong");
+                        send_pong(&keypair, &socket, &from, &ping);
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1_000));
+    }
+
+}
+
+
+
 fn main() {
-    println!("Hello, world!");
 
-    //test_socket_stuff();
+    test_ping();
 
-    //read_snmp_file();
-
-    let platform = format!(
-        "{}/{}/{}",
-        std::env::consts::FAMILY,
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
-
-    println!("platform string: {}", platform);
-
-    let t = TestStruct::default();
-
-    println!("TestStruct {:?}", &t);
-    println!("TestStruct sum:{}", t.sum());
-
-    abc();
-
-    sysctl_read("security.mac.amfi.platform_ident_for_hardened_proc");
 }
 
 #[cfg(test)]
@@ -306,29 +531,9 @@ mod tests {
     use {
         super::*,
     };
-    /*
-    use {
-        super::*,
-        bincode::serialize,
-        solana_ledger::{blockstore::Blockstore, blockstore_meta::SlotMeta, get_tmp_ledger_path},
-        solana_perf::test_tx::test_tx,
-        solana_sdk::{clock::DEFAULT_TICKS_PER_SLOT, hash::hash},
-        std::sync::mpsc::sync_channel,
-    };
 
-    #[test]
-    fn test_poh_recorder_no_zero_tick() {
-        let prev_hash = Hash::default();
-        let ledger_path = get_tmp_ledger_path!();
-        {
-        }
-    }
-    */
 
     #[test]
     fn test_teststruct() {
-        let t = TestStruct::default();
-        let sum = t.sum();
-        assert_eq!(sum, 0);
     }
 }
