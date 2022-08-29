@@ -482,7 +482,7 @@ fn test_ping() {
     //let keypair = Keypair::new();
     //let keypair = Arc::new(keypair);
 
-    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+    let socket = UdpSocket::bind("10.138.0.18:0").unwrap();
     let socket = Arc::new(socket);
 
     //let recv_handle = start_recver(keypair.clone(), socket.clone());
